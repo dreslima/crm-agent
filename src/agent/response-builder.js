@@ -65,36 +65,127 @@ Como posso ajudar?`;
   }
 
   /**
-   * Build action summary for confirmation
+   * Build action summary for confirmation (V2 - detailed format)
    */
-  buildSummary(actions, collectedData) {
-    let response = '✅ *Pronto! Vou fazer:*\n\n';
+  buildSummaryV2(intentions, actions, collectedData) {
+    // Format intentions for display
+    const intentionLabels = {
+      'CREATE_LEAD': 'Criar Lead',
+      'CREATE_TASK': 'Criar Tarefa',
+      'CREATE_DEAL': 'Criar Negócio',
+      'CREATE_CLIENT': 'Criar Cliente',
+      'UPDATE_LEAD': 'Atualizar Lead',
+      'UPDATE_TASK': 'Atualizar Tarefa',
+      'MARK_TASK_DONE': 'Finalizar Tarefa',
+      'ADD_TAG': 'Adicionar Tag'
+    };
 
-    let actionNum = 1;
-    for (const action of actions) {
-      response += `${actionNum}️⃣ *${action.label}*\n`;
+    const formattedIntentions = intentions
+      .filter(i => intentionLabels[i])
+      .map(i => intentionLabels[i])
+      .join(' + ');
 
-      for (const [key, value] of Object.entries(action.data || {})) {
-        if (value !== null && value !== undefined) {
-          const displayKey = this.formatKey(key);
-          let displayValue = value;
+    let response = '📋 *Ações Planejadas*\n';
+    response += '━━━━━━━━━━━━━━━━━━━━\n\n';
 
-          // Format date nicely
-          if (key === 'dueDate' || key === 'date') {
-            displayValue = dateParser.formatForDisplay(value);
-          }
-
-          response += `   • ${displayKey}: ${displayValue}\n`;
-        }
-      }
-
-      response += '\n';
-      actionNum++;
+    // Intentions
+    if (formattedIntentions) {
+      response += `🎯 *Intenção:* ${formattedIntentions}\n\n`;
     }
 
+    // Action details
+    for (const action of actions) {
+      if (action.type === 'task') {
+        response += `📝 *Tarefa:* ${action.label}\n`;
+        const title = action.data?.title || action.data?.description || 'Sem título';
+        response += `   • Descrição: ${title}\n`;
+        if (action.data?.dueDate) {
+          response += `   • Data: ${dateParser.formatForDisplay(action.data.dueDate)}\n`;
+        }
+        if (action.data?.entityId) {
+          response += `   • Vinculada a: Lead ID ${action.data.entityId}\n`;
+        }
+        response += '\n';
+      }
+
+      if (action.type === 'lead' && action.method !== 'useExistingLead') {
+        response += `👤 *Lead:* ${action.label}\n`;
+        const data = action.data || {};
+        if (data.name) response += `   • Nome: ${data.name}\n`;
+        if (data.email) response += `   • Email: ${data.email}\n`;
+        if (data.phone) response += `   • Telefone: ${data.phone}\n`;
+        response += '\n';
+      }
+    }
+
+    response += '━━━━━━━━━━━━━━━━━━━━\n';
     response += 'Confirma? (sim/não)';
 
     return response;
+  }
+
+  /**
+   * Found duplicates - ask user to choose
+   */
+  foundDuplicates(duplicates, collectedData) {
+    const lead = duplicates[0];
+    const matchIcon = {
+      'name': '👤',
+      'email': '📧',
+      'phone': '📱'
+    }[lead.matchType] || '🔗';
+
+    let response = `⚠️ *Lead já existente!*\n`;
+    response += '━━━━━━━━━━━━━━━━━━━━\n\n';
+
+    response += `${matchIcon} *Encontrado:* ${lead.name}\n`;
+    response += `   📋 ID: ${lead.id}\n`;
+    if (lead.email) response += `   📧 Email: ${lead.email}\n`;
+    if (lead.mobile) response += `   📱 Tel: ${lead.mobile}\n`;
+    response += `\n🔍 *Correspondência:* ${lead.matchType} = "${lead.matchValue}"\n`;
+
+    response += '\n━━━━━━━━━━━━━━━━━━━━\n\n';
+    response += `*O que deseja fazer?*\n\n`;
+    response += `1️⃣ Usar este lead existente\n`;
+    response += `2️⃣ Criar novo lead mesmo assim\n\n`;
+    response += `Responda "1" ou "2"`;
+
+    return response;
+  }
+
+  /**
+   * User chose to use existing lead
+   */
+  existingLeadChosen(lead, actions, collectedData) {
+    const taskAction = actions.find(a => a.type === 'task');
+
+    let response = `👤 *Usando lead existente*\n`;
+    response += '━━━━━━━━━━━━━━━━━━━━\n\n';
+
+    response += `✅ Lead: ${lead.name}\n`;
+    response += `   📋 ID: ${lead.id}\n\n`;
+
+    if (taskAction) {
+      response += `📅 *Tarefa:* ${taskAction.label}\n`;
+      const title = taskAction.data?.title || taskAction.data?.description || 'Sem título';
+      response += `   • Descrição: ${title}\n`;
+      if (taskAction.data?.dueDate) {
+        response += `   • Data: ${dateParser.formatForDisplay(taskAction.data.dueDate)}\n`;
+      }
+      response += '\n';
+    }
+
+    response += '━━━━━━━━━━━━━━━━━━━━\n';
+    response += 'Confirma? (sim/não)';
+
+    return response;
+  }
+
+  /**
+   * Invalid response to duplicate question
+   */
+  invalidDuplicateResponse() {
+    return '❓ Responda apenas:\n\n1️⃣ - Usar lead existente\n2️⃣ - Criar novo lead';
   }
 
   /**
@@ -104,8 +195,19 @@ Como posso ajudar?`;
     let response = '✅ *Executado com sucesso!*\n\n';
 
     for (const result of results) {
-      response += `📋 *${result.type}*: ${result.name || result.title}\n`;
-      response += `   ID: ${result.id}\n\n`;
+      if (result.type === 'lead' && result.existing) {
+        response += `👤 *Lead:* ${result.name}\n`;
+        response += `   📋 ID: ${result.id} (existente)\n\n`;
+      } else if (result.type === 'lead') {
+        response += `👤 *Lead criado:* ${result.name}\n`;
+        response += `   📋 ID: ${result.id}\n\n`;
+      } else if (result.type === 'task') {
+        response += `📅 *Tarefa:* ${result.title}\n`;
+        response += `   📋 ID: ${result.id}\n\n`;
+      } else {
+        response += `📋 *${result.type}*: ${result.name || result.title}\n`;
+        response += `   ID: ${result.id}\n\n`;
+      }
     }
 
     response += 'Posso ajudar com mais alguma coisa? 😊';

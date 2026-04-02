@@ -88,6 +88,59 @@ export class HefflClient {
   }
 
   /**
+   * Find duplicates by name, email, or phone
+   * Returns array of matching leads
+   */
+  async findDuplicateLeads(data) {
+    const { name, email, phone } = data;
+    const duplicates = [];
+
+    try {
+      // Get all leads (with pagination if needed)
+      const response = await this.request('GET', '/leads');
+      const leads = response.items || response.data || [];
+
+      for (const lead of leads) {
+        // Skip archived leads
+        if (lead.archived) continue;
+
+        // Check name match
+        if (name && lead.name) {
+          const normalizedName = name.toLowerCase().trim();
+          const leadName = lead.name.toLowerCase().trim();
+          if (normalizedName === leadName || leadName.includes(normalizedName)) {
+            duplicates.push({ ...lead, matchType: 'name', matchValue: name });
+            continue;
+          }
+        }
+
+        // Check email match
+        if (email && lead.email) {
+          const normalizedEmail = email.toLowerCase().trim();
+          const leadEmail = lead.email.toLowerCase().trim();
+          if (normalizedEmail === leadEmail) {
+            duplicates.push({ ...lead, matchType: 'email', matchValue: email });
+            continue;
+          }
+        }
+
+        // Check phone match (normalize for comparison)
+        if (phone && lead.mobile) {
+          const normalizedPhone = phone.replace(/\D/g, '');
+          const leadPhone = lead.mobile.replace(/\D/g, '');
+          if (normalizedPhone === leadPhone) {
+            duplicates.push({ ...lead, matchType: 'phone', matchValue: phone });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[Heffl] Error finding duplicates:', error.message);
+    }
+
+    return duplicates;
+  }
+
+  /**
    * Update lead
    */
   async updateLead(id, data) {

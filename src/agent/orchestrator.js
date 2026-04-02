@@ -162,6 +162,24 @@ export class Orchestrator {
       }
     }
 
+    // Check for duplicate leads before creating (if CREATE_LEAD intent)
+    if (intentions.includes('CREATE_LEAD')) {
+      const duplicates = await this.checkForDuplicates(collectedData);
+      if (duplicates.length > 0) {
+        // Ask user if they want to use existing lead
+        const response = responseBuilder.foundDuplicates(duplicates, collectedData);
+        this.memory.setPendingAction(phone, {
+          intentions,
+          actions,
+          collectedData,
+          duplicates,
+          awaitingDuplicateChoice: true
+        });
+        this.memory.addMessage(phone, 'agent', response);
+        return response;
+      }
+    }
+
     // Set pending action for confirmation
     this.memory.setPendingAction(phone, {
       intentions,
@@ -169,10 +187,28 @@ export class Orchestrator {
       collectedData
     });
 
-    // Build summary and ask confirmation
-    const response = responseBuilder.buildSummary(actions, collectedData);
+    // Build summary and ask confirmation (V2 format)
+    const response = responseBuilder.buildSummaryV2(intentions, actions, collectedData);
     this.memory.addMessage(phone, 'agent', response);
     return response;
+  }
+
+  /**
+   * Check for duplicate leads
+   */
+  async checkForDuplicates(data) {
+    if (!data.name && !data.email && !data.phone) {
+      return [];
+    }
+
+    try {
+      const duplicates = await this.crm.findDuplicateLeads(data);
+      console.log(`[Orchestrator] Found ${duplicates.length} potential duplicates`);
+      return duplicates;
+    } catch (error) {
+      console.error('[Orchestrator] Error checking duplicates:', error);
+      return [];
+    }
   }
 
   /**
@@ -180,7 +216,71 @@ export class Orchestrator {
    */
   async handleConfirmation(phone, message, pendingAction) {
     const confirmationType = this.memory.isConfirmation(phone, message);
+    const { awaitingDuplicateChoice, duplicates, actions, collectedData, intentions } = pendingAction;
 
+    // Handle duplicate choice response
+    if (awaitingDuplicateChoice) {
+      const lowerMsg = message.toLowerCase().trim();
+
+      // User chose to use existing lead
+      if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg === 'usar' || lowerMsg === '1') {
+        const existingLead = duplicates[0];
+
+        // Update actions to use existing lead instead of creating new
+        const updatedActions = actions.map(action => {
+          if (action.type === 'lead' && action.method === 'createLead') {
+            return {
+              ...action,
+              label: 'Usar Lead Existente',
+              method: 'useExistingLead',
+              data: { existingLeadId: existingLead.id, name: existingLead.name }
+            };
+          }
+          if (action.type === 'task' && action.method === 'createTask') {
+            return {
+              ...action,
+              data: {
+                ...action.data,
+                entity: 'leads',
+                entityId: existingLead.id
+              }
+            };
+          }
+          return action;
+        });
+
+        // Update pending action
+        this.memory.setPendingAction(phone, {
+          ...pendingAction,
+          actions: updatedActions,
+          awaitingDuplicateChoice: false,
+          useExistingLead: existingLead
+        });
+
+        // Show updated summary
+        const response = responseBuilder.existingLeadChosen(existingLead, updatedActions, collectedData);
+        this.memory.addMessage(phone, 'agent', response);
+        return response;
+      }
+
+      // User chose to create new lead anyway
+      if (lowerMsg === 'não' || lowerMsg === 'nao' || lowerMsg === 'n' || lowerMsg === '2' || lowerMsg === 'novo' || lowerMsg === 'criar novo') {
+        // Continue with original plan (create new lead)
+        this.memory.setPendingAction(phone, {
+          ...pendingAction,
+          awaitingDuplicateChoice: false
+        });
+
+        const response = responseBuilder.buildSummaryV2(intentions, actions, collectedData);
+        this.memory.addMessage(phone, 'agent', response);
+        return response;
+      }
+
+      // Invalid response
+      return responseBuilder.invalidDuplicateResponse();
+    }
+
+    // Normal confirmation flow
     if (confirmationType === 'cancel') {
       this.memory.clearPendingAction(phone);
       return responseBuilder.cancelled();
@@ -362,6 +462,16 @@ export class Orchestrator {
           case 'createLead':
             result = await this.crm.createLead(action.data);
             results.push({ type: 'lead', id: result.id, name: result.name });
+            break;
+
+          case 'useExistingLead':
+            // Just use existing lead info (no creation needed)
+            results.push({
+              type: 'lead',
+              id: action.data.existingLeadId,
+              name: action.data.name,
+              existing: true
+            });
             break;
 
           case 'createTask':
