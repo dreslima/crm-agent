@@ -4,7 +4,7 @@ import axios from 'axios';
  * OpenRouter client for LLM inference
  */
 export class OpenRouterClient {
-  constructor(apiKey, model = 'anthropic/claude-3-haiku-20240307') {
+  constructor(apiKey, model = 'anthropic/claude-3.5-haiku') {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = 'https://openrouter.ai/api/v1';
@@ -143,6 +143,6 @@ CATÁLOGO:
 export function createOpenRouterClient() {
   return new OpenRouterClient(
     process.env.OPENROUTER_API_KEY,
-    process.env.OPENROUTER_MODEL || 'anthropic/claude-3-haiku-20240307'
+    process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-haiku'
   );
 }
