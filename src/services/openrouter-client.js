@@ -15,6 +15,7 @@ export class OpenRouterClient {
    */
   async chat(messages, options = {}) {
     try {
+      console.log(`[OpenRouter] Using model: ${this.model}`);
       const response = await axios.post(
         `${this.baseUrl}/chat/completions`,
         {
