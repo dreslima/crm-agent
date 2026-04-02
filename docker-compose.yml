@@ -1,0 +1,27 @@
+services:
+  crm-agent:
+    build: .
+    container_name: mtca-crm-agent
+    ports:
+      - "3200:3200"
+    environment:
+      - NODE_ENV=production
+      - PORT=3200
+      - HEFFL_API_KEY=${HEFFL_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - AGENT_SECRET=${AGENT_SECRET}
+      - SESSION_TTL_MINUTES=30
+      - CONFIRMATION_TIMEOUT_SECONDS=300
+    networks:
+      - mtca_internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  mtca_internal:
+    external: true
