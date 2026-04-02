@@ -51,9 +51,14 @@ export class HefflClient {
       tags: data.tags || []
     };
 
-    // Remove null values
+    // Remove null and empty values
     Object.keys(payload).forEach(key => {
-      if (payload[key] === null) delete payload[key];
+      if (payload[key] === null || payload[key] === undefined || payload[key] === '') {
+        delete payload[key];
+      }
+      if (Array.isArray(payload[key]) && payload[key].length === 0) {
+        delete payload[key];
+      }
     });
 
     return await this.request('POST', '/leads', payload);

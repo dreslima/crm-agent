@@ -1,6 +1,6 @@
 import { createOpenRouterClient } from '../services/openrouter-client.js';
 import { createHefflClient } from '../crm/heffl-client.js';
-import { ConversationMemory } from '../utils/conversation-memory.js';
+import { memory } from '../utils/conversation-memory.js';
 import { dateParser } from './date-parser.js';
 import { responseBuilder } from './response-builder.js';
 import { SYSTEM_PROMPT } from './prompts/system.js';
@@ -13,7 +13,7 @@ export class Orchestrator {
   constructor() {
     this.llm = createOpenRouterClient();
     this.crm = createHefflClient();
-    this.memory = new ConversationMemory();
+    this.memory = memory;  // Use singleton instance
   }
 
   /**
@@ -147,6 +147,20 @@ export class Orchestrator {
 
     // Build actions to execute
     const actions = this.buildActions(intentions, collectedData);
+
+    // Check if it's a query (no confirmation needed)
+    const isQuery = intentions.some(i => ['QUERY_LEADS', 'QUERY_TASKS'].includes(i));
+
+    if (isQuery) {
+      // Execute query directly
+      try {
+        const result = await this.executeActions(actions, collectedData);
+        this.memory.addMessage(phone, 'agent', result);
+        return result;
+      } catch (error) {
+        return responseBuilder.error(`Erro ao executar: ${error.message}`);
+      }
+    }
 
     // Set pending action for confirmation
     this.memory.setPendingAction(phone, {

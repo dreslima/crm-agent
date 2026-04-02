@@ -74,7 +74,7 @@ Como posso ajudar?`;
     for (const action of actions) {
       response += `${actionNum}️⃣ *${action.label}*\n`;
 
-      for (const [key, value] of Object.entries(action.data)) {
+      for (const [key, value] of Object.entries(action.data || {})) {
         if (value !== null && value !== undefined) {
           const displayKey = this.formatKey(key);
           let displayValue = value;
@@ -124,6 +124,20 @@ Como posso ajudar?`;
    * Build list response
    */
   buildList(items, type) {
+    // Handle different response formats
+    if (!items) items = [];
+    if (Array.isArray(items)) {
+      // Already an array
+    } else if (items.data) {
+      items = items.data;
+    } else if (items.payload) {
+      items = items.payload;
+    } else if (typeof items === 'object') {
+      items = [items];
+    } else {
+      items = [];
+    }
+
     if (!items || items.length === 0) {
       return `📭 Nenhum ${type} encontrado.`;
     }

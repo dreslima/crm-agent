@@ -1,4 +1,4 @@
-import chrono from 'chrono-node';
+import * as chrono from 'chrono-node';
 
 /**
  * Date parser using chrono-node for natural language dates
