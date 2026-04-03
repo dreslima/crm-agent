@@ -1,20 +1,19 @@
+# Deploy CRM Agent - Docker App
 name: Deploy CRM Agent
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'shared/services/crm-agent/**'
   workflow_dispatch:
 
 env:
   APP_NAME: crm-agent
-  PORTA: 3200
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ============================================================
-  # BUILD - Build Docker image e push para ghcr.io
-  # ============================================================
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -22,7 +21,6 @@ jobs:
     outputs:
       image: ${{ steps.meta.outputs.tags }}
       sha: ${{ github.sha }}
-      timestamp: ${{ steps.time.outputs.datetime }}
 
     permissions:
       contents: read
@@ -33,10 +31,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Get timestamp
-        id: time
-        run: echo "datetime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,25 +50,17 @@ jobs:
           tags: |
             type=sha,prefix=,format=long
             type=raw,value=latest
-            type=ref,event=branch
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: shared/services/crm-agent
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # ============================================================
-          # Docker GHA Cache - Reduces build time by ~70%
-          # ============================================================
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
-          sbom: true
-          build-args: |
-            BUILD_DATE=${{ steps.time.outputs.datetime }}
-            VCS_REF=${{ github.sha }}
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
@@ -82,17 +68,6 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           sha: ${{ github.sha }}
 
-      - name: Output image info
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Image built successfully"
-          echo "Image: ${{ steps.meta.outputs.tags }}"
-          echo "SHA: ${{ github.sha }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-  # ============================================================
-  # DEPLOY - Pull image e restart no VPS
-  # ============================================================
   deploy:
     needs: build
     runs-on: self-hosted
@@ -105,7 +80,7 @@ jobs:
       IMAGE_TAG: latest
       HEFFL_API_KEY: ${{ secrets.HEFFL_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      AGENT_SECRET: ${{ secrets.AGENT_SECRET }}
+      AGENT_SECRET: ${{ secrets.CRM_AGENT_SECRET }}
 
     permissions:
       contents: read
@@ -127,171 +102,56 @@ jobs:
           echo "Deploying $APP_NAME"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          WORK_DIR="$GITHUB_WORKSPACE"
-          mkdir -p "$WORK_DIR"
-
-          # Image to use (lowercase for docker)
-          IMAGE="$REGISTRY/$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]'):$IMAGE_TAG"
-          echo "Using image: $IMAGE"
-
-          # ============================================================
-          # SAVE CURRENT IMAGE FOR ROLLBACK
-          # ============================================================
-          echo "Saving current image for rollback..."
-          docker tag "$IMAGE" "mtca-$APP_NAME:backup" 2>/dev/null || true
-
           # Stop and remove existing container
-          echo "Stopping existing container..."
           docker stop mtca-crm-agent 2>/dev/null || true
           docker rm mtca-crm-agent 2>/dev/null || true
 
           # Pull new image
-          echo "Pulling new image..."
+          IMAGE="$REGISTRY/$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]'):$IMAGE_TAG"
           docker pull "$IMAGE"
 
-          # Create .env file with secrets
-          printf 'NODE_ENV=production\nPORT=%s\nHEFFL_API_KEY=%s\nOPENROUTER_API_KEY=%s\nAGENT_SECRET=%s\nSESSION_TTL_MINUTES=30\nCONFIRMATION_TIMEOUT_SECONDS=300\n' \
-            "$PORTA" "$HEFFL_API_KEY" "$OPENROUTER_API_KEY" "$AGENT_SECRET" > "$WORK_DIR/.env"
-
           # Start container
-          echo "Starting container..."
           docker run -d \
             --name mtca-crm-agent \
             --restart unless-stopped \
             --network mtca_internal \
-            --env-file "$WORK_DIR/.env" \
-            -p $PORTA:$PORTA \
+            -p 3200:3200 \
+            -e NODE_ENV=production \
+            -e PORT=3200 \
+            -e HEFFL_API_KEY="$HEFFL_API_KEY" \
+            -e OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
+            -e OPENROUTER_MODEL="anthropic/claude-3.5-haiku" \
+            -e AGENT_SECRET="$AGENT_SECRET" \
             "$IMAGE"
 
-          # Cleanup .env
-          rm -f "$WORK_DIR/.env"
-
       - name: Wait for startup
-        run: |
-          echo "Waiting for $APP_NAME to start..."
-          sleep 15
+        run: sleep 10
 
       - name: Health Check
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Running Health Check"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
           MAX_ATTEMPTS=5
           for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "Attempt $i/$MAX_ATTEMPTS..."
-
-            # Check container status
-            CONTAINER_STATUS=$(docker ps --filter "name=mtca-$APP_NAME" --format "{{.Status}}" 2>/dev/null || echo "not found")
-            echo "Container status: $CONTAINER_STATUS"
-
-            # Check HTTP health endpoint
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORTA/health" --max-time 10 || echo "000")
-            echo "HTTP Status: $STATUS"
-
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3200/health" --max-time 10 || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
-              echo ""
               echo "✅ Health check PASSED!"
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
               exit 0
             fi
-
-            if [ $i -lt $MAX_ATTEMPTS ]; then
-              echo "Retrying in 10 seconds..."
-              sleep 10
-            fi
+            [ $i -lt $MAX_ATTEMPTS ] && sleep 10
           done
-
-          echo ""
-          echo "⚠️ Health check not passed"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⚠️ Health check failed"
           exit 1
 
       - name: Show logs
         if: always()
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Container Logs"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          docker logs mtca-crm-agent --tail=30
+        run: docker logs mtca-crm-agent --tail=30
 
-      - name: Show container status
-        if: always()
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Container Status"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          docker ps --filter "name=mtca-$APP_NAME" -a
-
-  # ============================================================
-  # ROLLBACK - Executa se deploy falhar
-  # ============================================================
-  rollback:
-    needs: [build, deploy]
-    if: failure()
-    runs-on: self-hosted
-    environment: production
-
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
-      IMAGE_TAG: latest
-
-    steps:
-      - name: Rollback
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "⚠️ DEPLOY FAILED - Initiating Rollback"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-          # Stop current
-          docker stop mtca-crm-agent 2>/dev/null || true
-          docker rm mtca-crm-agent 2>/dev/null || true
-
-          # Restore backup
-          echo "Restoring previous version..."
-          docker tag "mtca-$APP_NAME:backup" "mtca-$APP_NAME:latest" 2>/dev/null || true
-          docker run -d \
-            --name mtca-crm-agent \
-            --restart unless-stopped \
-            --network mtca_internal \
-            -p $PORTA:$PORTA \
-            "mtca-$APP_NAME:latest"
-
-          echo ""
-          echo "✅ Rollback complete"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: Notify Failure
-        if: always()
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "❌ Deployment Failed"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "App: $APP_NAME"
-          echo "Port: $PORTA"
-          echo "SHA: ${{ needs.build.outputs.sha }}"
-          echo "Image: ${{ needs.build.outputs.image }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Rollback was attempted"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-  # ============================================================
-  # SUCCESS - Executa apenas se tudo passar
-  # ============================================================
   success:
     needs: [build, deploy]
     if: success()
     runs-on: ubuntu-latest
-
     steps:
-      - name: Success Summary
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      - run: |
           echo "✅ DEPLOYMENT SUCCESSFUL"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "App: $APP_NAME"
-          echo "Port: $PORTA"
-          echo "Image: ${{ needs.build.outputs.image }}"
           echo "SHA: ${{ needs.build.outputs.sha }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
